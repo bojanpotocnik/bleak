@@ -26,6 +26,8 @@ REQUIRED = [
     'pyobjc-framework-CoreBluetooth;platform_system=="Darwin"',
     # Windows reqs
     'pythonnet;platform_system=="Windows"',
+    # Common reqs
+    'dataclasses;python_version<"3.7"'
 ]
 
 TEST_REQUIRED = ["pytest", "pytest-cov"]

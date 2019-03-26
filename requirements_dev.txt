@@ -11,3 +11,5 @@ PyYAML>=3.13
 pytest>=3.9.2
 pytest-runner>=4.2
 pytest-cov>=2.5.1
+# On Windows: pythonnet from https://ci.appveyor.com/project/pythonnet/pythonnet/branch/master
+dataclasses;python_version<"3.7"
