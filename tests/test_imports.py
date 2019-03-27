@@ -10,7 +10,7 @@ import pytest
 
 _IS_CI = os.environ.get("CI", "false").lower() == "true"
 _IS_AZURE_PIPELINES = os.environ.get("SYSTEM_HOSTTYPE", "") == "build"
-_OS = os.environ.get("AGENT_OS").lower()
+_OS = (os.environ.get("AGENT_OS") or platform.system()).lower()
 
 
 @pytest.mark.skipif(

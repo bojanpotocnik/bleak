@@ -14,7 +14,8 @@ from asyncio.events import AbstractEventLoop
 from bleak.backends.device import BLEDevice
 
 # Import of Bleak CLR->UWP Bridge. It is not needed here, but it enables loading of Windows.Devices
-from BleakBridge import Bridge
+# noinspection PyUnresolvedReferences
+from BleakBridge import Bridge  # noqa: F401
 
 from System import Array
 from Windows.Devices import Enumeration

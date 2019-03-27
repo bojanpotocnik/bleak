@@ -21,12 +21,10 @@ from bleak.backends.device import BLEDevice
 
 # Import of Bleak CLR->UWP Bridge. It is not needed here, but it enables loading of Windows.Devices
 # noinspection PyUnresolvedReferences
-from BleakBridge import Bridge
+from BleakBridge import Bridge  # noqa: F401
 
 # noinspection PyUnresolvedReferences,PyPackageRequirements
 from System import Array, Byte
-# noinspection PyUnresolvedReferences,PyPackageRequirements
-from Windows.Devices import Enumeration
 
 # noinspection PyUnresolvedReferences,PyPackageRequirements
 from Windows.Devices.Bluetooth.Advertisement import (BluetoothLEAdvertisementWatcher,
@@ -174,7 +172,7 @@ class GAPDataType(enum.IntEnum):
     """
     Service_Data_16bit_UUID = 0x16
     """
-    Bluetooth Core Specification: 
+    Bluetooth Core Specification:
     Vol. 3, Part C, sections 11.1.10 and 18.10 (v4.0)
     Core Specification Supplement, Part A, section 1.11
     """
@@ -241,32 +239,32 @@ class AdvertisementType(enum.IntEnum):
 
     CONNECTABLE_DIRECTED = 1
     """
-    The advertisement is directed and indicates that the device is connectable but not scannable. 
+    The advertisement is directed and indicates that the device is connectable but not scannable.
     This advertisement type cannot carry data.
     This corresponds with the ADV_DIRECT_IND type defined in the Bluetooth LE specifications.
     """
     CONNECTABLE_UNDIRECTED = 0
     """
-    The advertisement is undirected and indicates that the device is connectable and scannable. 
+    The advertisement is undirected and indicates that the device is connectable and scannable.
     This advertisement type can carry data.
     This corresponds with the ADV_IND type defined in the Bluetooth LE specifications.
     """
     NON_CONNECTABLE_UNDIRECTED = 3
     # noinspection SpellCheckingInspection
     """
-    The advertisement is undirected and indicates that the device is not connectable nor scannable. 
+    The advertisement is undirected and indicates that the device is not connectable nor scannable.
     This advertisement type can carry data.
     This corresponds with the ADV_NONCONN_IND type defined in the Bluetooth LE specifications.
     """
     SCANNABLE_UNDIRECTED = 2
     """
-    The advertisement is undirected and indicates that the device is scannable but not connectable. 
+    The advertisement is undirected and indicates that the device is scannable but not connectable.
     This advertisement type can carry data.
     This corresponds with the ADV_SCAN_IND type defined in the Bluetooth LE specifications.
     """
     SCAN_RESPONSE = 4
     """
-    This advertisement is a scan response to a scan request issued for a scannable advertisement. 
+    This advertisement is a scan response to a scan request issued for a scannable advertisement.
     This advertisement type can carry data.
     This corresponds with the SCAN_RSP type defined in the Bluetooth LE specifications.
     """
@@ -291,7 +289,7 @@ class Advertisement:
         """The Bluetooth LE advertisement data payload."""
         data_type: GAPDataType
         """The `Bluetooth LE advertisement data type
-         <https://www.bluetooth.com/specifications/assigned-numbers/generic-access-profile>`_ 
+         <https://www.bluetooth.com/specifications/assigned-numbers/generic-access-profile>`_
          as defined by the Bluetooth Special Interest Group (SIG)."""
 
         def __init__(self, ds: BluetoothLEAdvertisementDataSection) -> None:
@@ -330,7 +328,7 @@ class Advertisement:
         """
 
         company_id: int
-        """The `Bluetooth LE company identifier code 
+        """The `Bluetooth LE company identifier code
         <https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers>`_
          as defined by the Bluetooth Special Interest Group (SIG)."""
         data: bytes
@@ -358,7 +356,7 @@ class Advertisement:
     """The list of service UUIDs in 128-bit GUID format in a BluetoothLEAdvertisement."""
     appearance: Optional[int] = None
     """
-    16-bit device appearance value as `defined by SIG 
+    16-bit device appearance value as `defined by SIG
     <https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.characteristic.gap.appearance.xml>`_.
     """
     tx_power_level: Optional[int] = None
@@ -422,7 +420,7 @@ class AdvertisementReceivedEventArgs:
     # noinspection SpellCheckingInspection
     """
     The received signal strength indicator (RSSI) value, in dBm, for this event.
-    This value could be the raw RSSI or a filtered RSSI depending on filtering 
+    This value could be the raw RSSI or a filtered RSSI depending on filtering
     settings configured through BluetoothSignalStrengthFilter.
     """
     timestamp: datetime.datetime

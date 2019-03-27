@@ -27,10 +27,11 @@ class BLEDevice(object):
 
     """
 
-    def __init__(self, address: str, name: Optional[str], details=None):
-        self.address: str = address
-        self.name: Optional[str] = name  # name or "Unknown"
-        self.details: Union['Enumeration.DeviceInformation', 'AdvertisementReceivedEventArgs', str, Any] = details
+    def __init__(self, address: str, name: Optional[str],
+                 details: Union['Enumeration.DeviceInformation', 'AdvertisementReceivedEventArgs', str, Any] = None):
+        self.address = address
+        self.name = name  # name or "Unknown"
+        self.details = details
 
     @property
     def _name_string(self) -> str:
