@@ -5,15 +5,19 @@ Perform advanced Bluetooth LE Scan.
 Created on 2019-03-26 by bojanpotocnik <info@bojanpotocnik.com>
 
 """
+import asyncio
 import datetime
 import enum
-import pathlib
 import logging
-import asyncio
+import os
+import re
+import threading
 # noinspection PyCompatibility
 from dataclasses import dataclass
-from typing import List, Optional, Union, Pattern, Iterable
+from typing import List, Optional, Union, Pattern, MutableSequence, Dict, AsyncIterable
 from asyncio.events import AbstractEventLoop
+
+from bleak.backends.device import BLEDevice
 
 # Import of Bleak CLR->UWP Bridge. It is not needed here, but it enables loading of Windows.Devices
 # noinspection PyUnresolvedReferences
@@ -36,7 +40,6 @@ from Windows.Devices.Bluetooth.Advertisement import (BluetoothLEAdvertisementWat
 from Windows.Storage.Streams import DataReader, IBuffer
 
 logger = logging.getLogger(__name__)
-_here = pathlib.Path(__file__).parent
 
 
 # noinspection SpellCheckingInspection
@@ -457,11 +460,30 @@ class AdvertisementReceivedEventArgs:
         )
 
 
+@enum.unique
+class AdvertisementWatcherStatus(enum.IntEnum):
+    """
+    `BluetoothLEAdvertisementWatcherStatus
+    <https://docs.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.advertisement.bluetoothleadvertisementwatcherstatus>`_
+    enum represents the possible states of the BluetoothLEAdvertisementWatcher.
+    """
+    Aborted = 4
+    """An error occurred during transition or scanning that stopped the watcher due to an error."""
+    Created = 0
+    """The initial status of the watcher."""
+    Started = 1
+    """The watcher is started."""
+    Stopped = 3
+    """The watcher is stopped."""
+    Stopping = 2
+    """The watcher stop command was issued."""
+
+
 async def find(mac: Union[None, str, Pattern] = None,
                name: Union[None, str, Pattern] = None,
-               services: Optional[Iterable[Union[str, Pattern]]] = None,
-               timeout: float = 5.0,
-               loop: AbstractEventLoop = None) -> None:  # AsyncIterable[BLEDevice]:
+               services: Optional[MutableSequence[Union[str, Pattern]]] = None,
+               timeout: float = 5.0, active_scan: bool = True,
+               loop: AbstractEventLoop = None) -> AsyncIterable[BLEDevice]:
     """
     Perform a Bluetooth LE Scan and locate the device matching
     the required filtering parameters.
@@ -476,57 +498,192 @@ async def find(mac: Union[None, str, Pattern] = None,
     :param services: List of UUIDs of services on the device (advertised in the
                      advertising or scan response packet). The same rules as
                      `mac` or `name`. If multiple services are provided, the
-                     device must provide all of them. 16-bit UUIDs are
-                     considered SIG services.
+                     device must provide all of them.
+                     '0x' in front is ignored/stripped.
+                     16-bit (4 or 6 characters, or integers) UUIDs are considered
+                     SIG defined services and are converted to 128-bit UUIDs.
     :param timeout: Maximum time to scan for (seconds). If negative number then
                     the scan will stop as soon as the first device is found.
+    :param active_scan: Whether to use the active scanning mode. In this mode scan
+                        request packets will be sent from the platform to actively
+                        query for more advertisement data (Scan Response data).
 
     :param loop: The event loop to use.
 
     :returns: Devices as soon as they are found and updated.
     """
-    loop = loop if loop else asyncio.get_event_loop()
+    loop = loop or asyncio.get_event_loop()
+
+    # BluetoothLEAdvertisementWatcher.AdvertisementFilter could be used for filtering, however filtering
+    # here provides more control, enables regex filtering and more.
+    # Performance impact is negligible.
+
+    # region Check filters
+    if mac:
+        if isinstance(mac, str):
+            # Remove any delimiters and add standard delimiters.
+            mac = re.sub(r"[^A-F\d]", "", mac.upper())
+            mac = ":".join(mac[i:i + 2] for i in range(0, len(mac), 2))
+        elif not isinstance(mac, Pattern):
+            raise TypeError(f"Invalid type {type(mac)} for MAC filter")
+    if name and not isinstance(name, (str, Pattern)):
+        raise TypeError(f"Invalid type {type(name)} for name filter")
+    if services:
+        for i, service in enumerate(services):
+            # Convert SIG short 16-bit UUIDs to 128-bit UUIDs.
+            if isinstance(service, str):
+                service = service.replace("0x", "").lower()
+                if (len(service) == 4) and service.isalnum():
+                    service = f"0000{service}-0000-1000-8000-00805f9b34fb"
+                elif (len(service) != 36) or (service.count("-") != 4):
+                    raise ValueError(f"Invalid UUID format '{service}'."
+                                     f" It shall be SIG 16-bit UUID format (e.g. 0x180a or 180a) or"
+                                     f" 128-bit Type 4 UUID (e.g. 0000180a-0000-1000-8000-00805f9b34fb).")
+                services[i] = service
+            elif isinstance(service, int):
+                services[i] = f"0000{service:04x}-0000-1000-8000-00805f9b34fb"
+            elif not isinstance(service, Pattern):
+                raise TypeError(f"Invalid type {type(service)} for service filter.")
+    # endregion Check filters
+
+    # Watcher works in the separate thread and callbacks are executed on multiple different
+    # worker (Dummy) threads, therefore thread-safe containers must be used to share objects.
+    devices: Dict[str, BLEDevice] = {}
+    new_devices: List[BLEDevice] = []
+
+    # region BluetoothLEAdvertisementWatcher callbacks
+    def advertisement_watcher__received(_: BluetoothLEAdvertisementWatcher,
+                                        args: BluetoothLEAdvertisementReceivedEventArgs):
+        args = AdvertisementReceivedEventArgs(args)
+        # logger.debug(f"advertisement_watcher__received(_, {args})"
+        #              f" in {os.getpid()}.{threading.get_ident()}.{threading.current_thread().name}")
+        device = BLEDevice(args.bluetooth_address, args.advertisement.local_name, args)
+        filtered = 0
+
+        if mac:
+            if isinstance(mac, str) and (mac != args.bluetooth_address):
+                logger.debug(f"Ignore, MAC {mac} != {device}.")
+                return
+            if isinstance(mac, Pattern) and (not mac.match(args.bluetooth_address)):
+                logger.debug(f"Ignore, MAC {mac.pattern} does not match {device}.")
+                return
+            filtered += 1
+
+        if name:
+            if isinstance(name, str) and (name != args.advertisement.local_name):
+                logger.debug(f"Ignore, name '{name}' != {device}.")
+                return
+            if isinstance(name, Pattern) and (not name.match(args.advertisement.local_name)):
+                logger.debug(f"Ignore, name '{name.pattern}' does not match {device}.")
+                return
+            filtered += 1
+
+        if services:
+            if not args.advertisement.services:
+                logger.debug(f"Ignore, no services in {device}.")
+                return
+            # noinspection PyShadowingNames
+            for service in services:
+                if isinstance(service, str) and (service not in args.advertisement.services):
+                    logger.debug(f"Ignore, service '{service}' not in {args.advertisement.services} of {device}.")
+                    return
+                if isinstance(name, Pattern) and (not any(name.match(ds) for ds in args.advertisement.services)):
+                    logger.debug(f"Ignore, service '{service.pattern}' does not match"
+                                 f"any in {args.advertisement.services} of {device}.")
+                    return
+            filtered += 1
+
+        if filtered:
+            logger.debug(f"Adding {device} as it matches all filters ({filtered}).")
+        else:
+            logger.debug(f"Adding {device}")
+
+        if device.address not in devices:
+            devices[device.address] = device
+            new_devices.append(device)
+        # TODO: Handle updating of the devices in case of scan responses (what about RSSI?).
+
+    def advertisement_watcher__stopped(_: BluetoothLEAdvertisementWatcher,
+                                       __: BluetoothLEAdvertisementWatcherStoppedEventArgs):
+        logger.debug(f"advertisement_watcher__stopped(_, _)"
+                     f" in {os.getpid()}.{threading.get_ident()}.{threading.current_thread().name}")
+
+    # endregion BluetoothLEAdvertisementWatcher callbacks
 
     # https://docs.microsoft.com/en-us/uwp/api/Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
     watcher = BluetoothLEAdvertisementWatcher()
-    # Task is used for scan timeout to enable premature scan stop.
-    sleep_task = asyncio.Future()
 
-    def advertisement_watcher__received(sender: BluetoothLEAdvertisementWatcher,
-                                        args: BluetoothLEAdvertisementReceivedEventArgs):
-        # print(f"advertisement_watcher__received({sender}, {args})")
-        try:
-            p_obj = AdvertisementReceivedEventArgs(args)
-            logger.debug(str(p_obj))
-        except Exception as e:
-            logger.error(str(e))
-
-    def advertisement_watcher__stopped(sender: BluetoothLEAdvertisementWatcher,
-                                       args: BluetoothLEAdvertisementWatcherStoppedEventArgs):
-        logger.debug("advertisement_watcher__stopped({}, {})".format(sender, args))
+    def stop_scan() -> None:
+        logger.debug(f"stop_scan() in {os.getpid()}.{threading.get_ident()}.{threading.current_thread().name}")
+        watcher.Stop()
 
     # Add callbacks
     watcher.Received += advertisement_watcher__received
     watcher.Stopped += advertisement_watcher__stopped
+
     # Set additional watcher properties
-    watcher.ScanningMode = BluetoothLEScanningMode.Active
+    watcher.ScanningMode = BluetoothLEScanningMode.Active if active_scan else BluetoothLEScanningMode.Passive
 
-    # Watcher works outside of the Python process.
+    # Scanning is performed in the separate thread.
+    # Start the scan and wait for watcher to start scanning.
     watcher.Start()
-    try:
-        await asyncio.wait_for(sleep_task, timeout=timeout, loop=loop)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        pass
-    watcher.Stop()
+    while watcher.Status == AdvertisementWatcherStatus.Created.value:
+        await asyncio.sleep(0.01, loop=loop)
+    # Schedule scan stop after a timeout.
+    loop.call_later(timeout, stop_scan)
+    # Receive new devices from callbacks until the scanning is stopped.
+    while watcher.Status in (AdvertisementWatcherStatus.Started.value, AdvertisementWatcherStatus.Stopping.value):
+        if new_devices:
+            yield new_devices.pop()
+        await asyncio.sleep(0.01, loop=loop)
 
 
-def _test_find() -> None:
-    logger.setLevel(logging.DEBUG)
+async def _test_find(timeout: float = 10) -> None:
+    # noinspection SpellCheckingInspection
+    all_kwargs: List[dict] = [
+        dict(),
+        dict(timeout=2),
+        dict(active_scan=False),
+        # name
+        dict(name="Nordic_Blinky"),
+        dict(name=re.compile(r".*Blinky")),
+        # mac
+        dict(mac="FA:BD:60:D2:11:3A"),
+        dict(mac="FA:BD-60d2_113a"),
+        dict(mac="FABD60D2113A"),
+        dict(mac=re.compile(r"..:..:6\d:[A-Z\d]{2}:.....")),
+        # services (0x180A = Device Information)
+        dict(services=["0x180A"]),
+        dict(services=["180A"]),
+        dict(services=["0x0000180a-0000-1000-8000-00805f9b34fb"]),
+        dict(services=["0000180a-0000-1000-8000-00805f9b34fb"]),
+    ]
+
+    for kwargs in all_kwargs:
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = timeout
+
+        print(f"find({', '.join(f'{k}={v}' for k, v in kwargs.items())})")
+        async for device in find(**kwargs):
+            print(repr(device))
+        print()
+
+
+def _test() -> None:
+    # Enable debugging of the coroutines
+    # noinspection SpellCheckingInspection
+    os.environ["PYTHONASYNCIODEBUG"] = "1"
+    asyncio.get_event_loop().set_debug(enabled=True)
+    async_logger = logging.getLogger("asyncio")
+
+    async_logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
+    # Log to stdout
+    async_logger.addHandler(logging.StreamHandler())
     logger.addHandler(logging.StreamHandler())
-    loop = asyncio.get_event_loop()
 
-    loop.run_until_complete(find(timeout=10))
+    asyncio.run(_test_find(), debug=True)
 
 
 if __name__ == "__main__":
-    _test_find()
+    _test()
