@@ -12,6 +12,7 @@ from functools import wraps
 from typing import Callable, Any
 
 from bleak.exc import BleakError, BleakDotNetTaskError
+from bleak.utils import mac_str_2_int
 from bleak.backends.client import BaseBleakClient
 from bleak.backends.dotnet.discovery import discover
 from bleak.backends.dotnet.utils import wrap_IAsyncOperation
@@ -26,7 +27,7 @@ from bleak.backends.dotnet.descriptor import BleakGATTDescriptorDotNet
 from BleakBridge import Bridge
 
 # Import of other CLR components needed.
-from System import Array, Byte
+from System import Array, Byte, UInt64
 from Windows.Foundation import IAsyncOperation, TypedEventHandler
 from Windows.Storage.Streams import DataReader, DataWriter, IBuffer
 from Windows.Devices.Bluetooth import (
@@ -80,27 +81,36 @@ class BleakClientDotNet(BaseBleakClient):
             Boolean representing connection status.
 
         """
-        # Try to find the desired device.
-        devices = await discover(2.0, loop=self.loop)
-        sought_device = list(
-            filter(lambda x: x.address.upper() == self.address.upper(), devices)
-        )
-
-        if len(sought_device):
-            self._device_info = sought_device[0].details
-        else:
-            raise BleakError(
-                "Device with address {0} was " "not found.".format(self.address)
-            )
-
-        logger.debug("Connecting to BLE device @ {0}".format(self.address))
+        # Try to connect to the specified device directly.
+        logger.debug("Directly connecting to BLE device @ {0}".format(self.address))
         self._requester = await wrap_IAsyncOperation(
             IAsyncOperation[BluetoothLEDevice](
-                BluetoothLEDevice.FromIdAsync(self._device_info.Id)
+                BluetoothLEDevice.FromBluetoothAddressAsync(UInt64(mac_str_2_int(self.address)))
             ),
             return_type=BluetoothLEDevice,
             loop=self.loop,
         )
+        if self._requester is None:
+            # This was not successful. Try to find the desired device first.
+            devices = await discover(2.0, loop=self.loop)
+            sought_device = list(
+                filter(lambda x: x.address.upper() == self.address.upper(), devices)
+            )
+            if len(sought_device):
+                self._device_info = sought_device[0].details
+            else:
+                raise BleakError(
+                    "Device with address {0} was " "not found.".format(self.address)
+                )
+
+            logger.debug("Connecting to BLE device @ {0}".format(self.address))
+            self._requester = await wrap_IAsyncOperation(
+                IAsyncOperation[BluetoothLEDevice](
+                    BluetoothLEDevice.FromIdAsync(self._device_info.Id)
+                ),
+                return_type=BluetoothLEDevice,
+                loop=self.loop,
+            )
 
         def _ConnectionStatusChanged_Handler(sender, args):
             logger.debug("_ConnectionStatusChanged_Handler: " + args.ToString())
