@@ -14,11 +14,7 @@ from typing import Callable, Any
 from bleak.exc import BleakError, BleakDotNetTaskError
 from bleak.backends.client import BaseBleakClient
 from bleak.backends.dotnet.discovery import discover
-from bleak.backends.dotnet.utils import (
-    wrap_Task,
-    wrap_IAsyncOperation,
-    IAsyncOperationAwaitable,
-)
+from bleak.backends.dotnet.utils import wrap_IAsyncOperation
 from bleak.backends.service import BleakGATTServiceCollection
 from bleak.backends.dotnet.service import BleakGATTServiceDotNet
 from bleak.backends.dotnet.characteristic import BleakGATTCharacteristicDotNet
@@ -39,11 +35,11 @@ from Windows.Devices.Bluetooth import (
     BluetoothCacheMode,
 )
 from Windows.Devices.Bluetooth.GenericAttributeProfile import (
-    GattDeviceService,
+    # GattDeviceService,
     GattDeviceServicesResult,
     GattCharacteristic,
     GattCharacteristicsResult,
-    GattDescriptor,
+    # GattDescriptor,
     GattDescriptorsResult,
     GattCommunicationStatus,
     GattReadResult,
@@ -441,15 +437,9 @@ class BleakClientDotNet(BaseBleakClient):
             (int) The GattCommunicationStatus of the operation.
 
         """
-        if (
-            characteristic_obj.CharacteristicProperties
-            & GattCharacteristicProperties.Indicate
-        ):
+        if characteristic_obj.CharacteristicProperties & GattCharacteristicProperties.Indicate:
             cccd = GattClientCharacteristicConfigurationDescriptorValue.Indicate
-        elif (
-            characteristic_obj.CharacteristicProperties
-            & GattCharacteristicProperties.Notify
-        ):
+        elif characteristic_obj.CharacteristicProperties & GattCharacteristicProperties.Notify:
             cccd = GattClientCharacteristicConfigurationDescriptorValue.Notify
         else:
             cccd = getattr(GattClientCharacteristicConfigurationDescriptorValue, "None")
@@ -479,7 +469,7 @@ class BleakClientDotNet(BaseBleakClient):
                     characteristic_obj,
                     self._callbacks[characteristic_obj.Uuid.ToString()],
                 )
-            except Exception as e:
+            except Exception:
                 # This usually happens when a device reports that it support indicate, but it actually doesn't.
                 # TODO: Do not use Indicate? Return with Notify?
                 return GattCommunicationStatus.AccessDenied

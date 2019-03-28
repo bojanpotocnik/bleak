@@ -6,7 +6,7 @@ Created on 2017-12-05 by hbldh <henrik.blidh@nedomkull.com>
 """
 
 import asyncio
-from collections import Awaitable
+from collections.abc import Awaitable
 
 from bleak.exc import BleakDotNetTaskError
 
@@ -25,7 +25,7 @@ async def wrap_Task(task, loop):
 
     Args:
         task (System.Threading.Tasks.Task): .NET async task object
-        to await upon.
+utils.        to await upon.
         loop (Event Loop): The event loop to await on the Task in.
 
     Returns:

@@ -6,8 +6,8 @@ from bleak.uuids import uuidstr_to_str
 from bleak.backends.bluezdbus import defs
 from bleak.exc import BleakError
 
-_mac_address_regex = re.compile("^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
-_hci_device_regex = re.compile("^hci(\d+)$")
+_mac_address_regex = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
+_hci_device_regex = re.compile(r"^hci(\d+)$")
 
 
 def validate_mac_address(address):
