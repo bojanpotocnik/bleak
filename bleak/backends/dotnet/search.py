@@ -18,6 +18,7 @@ from typing import List, Optional, Union, Pattern, MutableSequence, Dict, AsyncI
 from asyncio.events import AbstractEventLoop
 
 from bleak.backends.device import BLEDevice
+from bleak.uuids import ble_uuid_to_128bit
 
 # Import of Bleak CLR->UWP Bridge. It is not needed here, but it enables loading of Windows.Devices
 # noinspection PyUnresolvedReferences
@@ -529,19 +530,12 @@ async def find(mac: Union[None, str, Pattern] = None,
     if services:
         for i, service in enumerate(services):
             # Convert SIG short 16-bit UUIDs to 128-bit UUIDs.
-            if isinstance(service, str):
-                service = service.replace("0x", "").lower()
-                if (len(service) == 4) and service.isalnum():
-                    service = f"0000{service}-0000-1000-8000-00805f9b34fb"
-                elif (len(service) != 36) or (service.count("-") != 4):
-                    raise ValueError(f"Invalid UUID format '{service}'."
-                                     f" It shall be SIG 16-bit UUID format (e.g. 0x180a or 180a) or"
-                                     f" 128-bit Type 4 UUID (e.g. 0000180a-0000-1000-8000-00805f9b34fb).")
-                services[i] = service
-            elif isinstance(service, int):
-                services[i] = f"0000{service:04x}-0000-1000-8000-00805f9b34fb"
-            elif not isinstance(service, Pattern):
-                raise TypeError(f"Invalid type {type(service)} for service filter.")
+            try:
+                services[i] = ble_uuid_to_128bit(service)
+            except TypeError:
+                if not isinstance(service, Pattern):
+                    raise TypeError(f"Invalid type {type(service)} for service filter.")
+
     # endregion Check filters
 
     # Watcher works in the separate thread and callbacks are executed on multiple different

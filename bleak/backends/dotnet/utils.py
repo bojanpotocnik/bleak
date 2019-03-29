@@ -25,7 +25,7 @@ async def wrap_Task(task, loop):
 
     Args:
         task (System.Threading.Tasks.Task): .NET async task object
-utils.        to await upon.
+        to await upon.
         loop (Event Loop): The event loop to await on the Task in.
 
     Returns:

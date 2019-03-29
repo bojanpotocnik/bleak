@@ -7,8 +7,9 @@ Created on 2018-04-23 by hbldh <henrik.blidh@nedomkull.com>
 """
 import abc
 import asyncio
-from typing import Callable, Any
+from typing import Callable, Any, Union
 
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.service import BleakGATTServiceCollection
 
 
@@ -91,11 +92,11 @@ class BaseBleakClient(abc.ABC):
     # I/O methods
 
     @abc.abstractmethod
-    async def read_gatt_char(self, _uuid: str) -> bytearray:
+    async def read_gatt_char(self, _uuid: Union[str, BleakGATTCharacteristic]) -> bytearray:
         """Perform read operation on the specified GATT characteristic.
 
         Args:
-            _uuid (str or UUID): The uuid of the characteristics to read from.
+            _uuid (str or UUID): The characteristic or the uuid of the characteristics to read from.
 
         Returns:
             (bytearray) The read data.
@@ -118,12 +119,12 @@ class BaseBleakClient(abc.ABC):
 
     @abc.abstractmethod
     async def write_gatt_char(
-        self, _uuid: str, data: bytearray, response: bool = False
+        self, _uuid: Union[str, BleakGATTCharacteristic], data: bytearray, response: bool = False
     ) -> Any:
         """Perform a write operation on the specified GATT characteristic.
 
         Args:
-            _uuid (str or UUID): The uuid of the characteristics to write to.
+            _uuid (str or UUID): The characteristic or the uuid of the characteristics to write to.
             data (bytes or bytearray): The data to send.
             response (bool): If write-with-response operation should be done. Defaults to `False`.
 
@@ -148,7 +149,7 @@ class BaseBleakClient(abc.ABC):
 
     @abc.abstractmethod
     async def start_notify(
-        self, _uuid: str, callback: Callable[[str, Any], Any], **kwargs
+        self, _uuid: Union[str, BleakGATTCharacteristic], callback: Callable[[str, Any], Any], **kwargs
     ) -> None:
         """Activate notifications/indications on a characteristic.
 
@@ -162,18 +163,18 @@ class BaseBleakClient(abc.ABC):
             client.start_notify(char_uuid, callback)
 
         Args:
-            _uuid (str or UUID): The uuid of the characteristics to start notification/indication on.
+            _uuid (str or UUID): The (uuid of the) characteristics to start notification/indication on.
             callback (function): The function to be called on notification.
 
         """
         raise NotImplementedError()
 
     @abc.abstractmethod
-    async def stop_notify(self, _uuid: str) -> None:
+    async def stop_notify(self, _uuid: Union[str, BleakGATTCharacteristic]) -> None:
         """Deactivate notification/indication on a specified characteristic.
 
         Args:
-            _uuid: The characteristic to stop notifying/indicating on.
+            _uuid: The (uuid of the) characteristic to stop notifying/indicating on.
 
         """
         raise NotImplementedError()

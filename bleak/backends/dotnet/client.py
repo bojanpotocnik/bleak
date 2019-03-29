@@ -9,11 +9,12 @@ import logging
 import asyncio
 from asyncio.events import AbstractEventLoop
 from functools import wraps
-from typing import Callable, Any
+from typing import Callable, Any, Union
 
 from bleak.exc import BleakError, BleakDotNetTaskError
 from bleak.utils import mac_str_2_int
 from bleak.backends.client import BaseBleakClient
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.dotnet.discovery import discover
 from bleak.backends.dotnet.utils import wrap_IAsyncOperation
 from bleak.backends.service import BleakGATTServiceCollection
@@ -236,7 +237,7 @@ class BleakClientDotNet(BaseBleakClient):
 
     # I/O methods
 
-    async def read_gatt_char(self, _uuid: str) -> bytearray:
+    async def read_gatt_char(self, _uuid: Union[str, BleakGATTCharacteristic]) -> bytearray:
         """Perform read operation on the specified GATT characteristic.
 
         Args:
@@ -246,9 +247,12 @@ class BleakClientDotNet(BaseBleakClient):
             (bytearray) The read data.
 
         """
-        characteristic = self.services.get_characteristic(str(_uuid))
-        if not characteristic:
-            raise BleakError("Characteristic {0} was not found!".format(_uuid))
+        if isinstance(_uuid, BleakGATTCharacteristic):
+            characteristic = _uuid
+        else:
+            characteristic = self.services.get_characteristic(str(_uuid))
+            if not characteristic:
+                raise BleakError("Characteristic {0} was not found!".format(_uuid))
 
         read_result = await wrap_IAsyncOperation(
             IAsyncOperation[GattReadResult](
@@ -308,7 +312,7 @@ class BleakClientDotNet(BaseBleakClient):
         return value
 
     async def write_gatt_char(
-        self, _uuid: str, data: bytearray, response: bool = False
+        self, _uuid: Union[str, BleakGATTCharacteristic], data: bytearray, response: bool = False
     ) -> Any:
         """Perform a write operation of the specified GATT characteristic.
 
@@ -318,9 +322,12 @@ class BleakClientDotNet(BaseBleakClient):
             response (bool): If write-with-response operation should be done. Defaults to `False`.
 
         """
-        characteristic = self.services.get_characteristic(str(_uuid))
-        if not characteristic:
-            raise BleakError("Characteristic {0} was not found!".format(_uuid))
+        if isinstance(_uuid, BleakGATTCharacteristic):
+            characteristic = _uuid
+        else:
+            characteristic = self.services.get_characteristic(str(_uuid))
+            if not characteristic:
+                raise BleakError("Characteristic {0} was not found!".format(_uuid))
 
         writer = DataWriter()
         writer.WriteBytes(Array[Byte](data))
@@ -402,7 +409,7 @@ class BleakClientDotNet(BaseBleakClient):
             )
 
     async def start_notify(
-        self, _uuid: str, callback: Callable[[str, Any], Any], **kwargs
+        self, _uuid: Union[str, BleakGATTCharacteristic], callback: Callable[[str, Any], Any], **kwargs
     ) -> None:
         """Activate notifications/indications on a characteristic.
 
@@ -420,7 +427,10 @@ class BleakClientDotNet(BaseBleakClient):
             callback (function): The function to be called on notification.
 
         """
-        characteristic = self.services.get_characteristic(str(_uuid))
+        if isinstance(_uuid, BleakGATTCharacteristic):
+            characteristic = _uuid
+        else:
+            characteristic = self.services.get_characteristic(str(_uuid))
 
         if self._notification_callbacks.get(str(_uuid)):
             await self.stop_notify(_uuid)
@@ -485,14 +495,17 @@ class BleakClientDotNet(BaseBleakClient):
                 return GattCommunicationStatus.AccessDenied
         return status
 
-    async def stop_notify(self, _uuid: str) -> None:
+    async def stop_notify(self, _uuid: Union[str, BleakGATTCharacteristic]) -> None:
         """Deactivate notification/indication on a specified characteristic.
 
         Args:
             _uuid: The characteristic to stop notifying/indicating on.
 
         """
-        characteristic = self.services.get_characteristic(str(_uuid))
+        if isinstance(_uuid, BleakGATTCharacteristic):
+            characteristic = _uuid
+        else:
+            characteristic = self.services.get_characteristic(str(_uuid))
 
         status = await wrap_IAsyncOperation(
             IAsyncOperation[GattCommunicationStatus](

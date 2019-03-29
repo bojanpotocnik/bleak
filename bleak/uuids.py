@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from typing import Union
 
 uuid16_dict = {
     0x0001: "SDP",
@@ -667,3 +668,38 @@ def uuidstr_to_str(uuid_):
         return "Unknown"
 
     return s
+
+
+def ble_uuid_to_128bit(uuid: Union[str, int]) -> str:
+    """Convert UUID to standard 128-bit Type 4 lowercase UUID.
+
+    If the UUID is provided as integer, it is assumed that it is a representation of 16-bit
+    short UUID as defined by Bluetooth SIG (0000xxxx-0000-1000-8000-00805f9b34fb). The same
+    is assumed if the provided string is 4 or 6 characters long (e.g. '0x1800' or '1800').
+    Otherwise the string shall be the full 128-bit Type 4 UUID ('0x' in front is ignored
+    and it is stripped).
+
+    Args:
+        uuid (str, int): UUID to convert.
+
+    Returns:
+        128-bit representation of the UUID.
+    """
+    if isinstance(uuid, str):
+        # 0x in front is ignored.
+        uuid = uuid.replace("0x", "").lower()
+        # Short IDs are considered Bluetooth SIG UUID.
+        if (len(uuid) == 4) and uuid.isalnum():
+            uuid = "0000" + uuid + "-0000-1000-8000-00805f9b34fb"
+        elif (len(uuid) != 36) or (uuid.count("-") != 4):
+            raise ValueError(
+                ("Invalid UUID format '{}'. It shall be SIG 16-bit UUID format (e.g. '0x180a' or '180a') or"
+                 " 128-bit Type 4 UUID (e.g. '0000180a-0000-1000-8000-00805f9b34fb').").format(uuid)
+            )
+
+    elif isinstance(uuid, int):
+        uuid = "0000{:04x}-0000-1000-8000-00805f9b34fb".format(uuid)
+    else:
+        raise TypeError("Invalid type {} of provided UUID '{}'.".format(type(uuid), uuid))
+
+    return uuid
