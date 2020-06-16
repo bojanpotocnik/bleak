@@ -8,7 +8,7 @@ Created on 2018-04-23 by hbldh <henrik.blidh@nedomkull.com>
 import abc
 import asyncio
 import uuid
-from typing import Callable, Any, Union
+from typing import Callable, Any, Union, Optional
 
 from bleak.backends.service import BleakGATTServiceCollection
 
@@ -83,6 +83,21 @@ class BaseBleakClient(abc.ABC):
 
         Returns:
             Boolean representing connection status.
+
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def pair(self, passkey: Optional[int] = None, **kwargs) -> bool:
+        """Pair with the specified device.
+
+        Args:
+            passkey: 6-digit passkey used for Passkey Entry pairing method if this
+                     method is used. Secure connections will be disabled to prevent
+                     Numeric Comparison pairing method if this passkey is provided.
+
+        Returns:
+            Boolean representing pairing and connection status.
 
         """
         raise NotImplementedError()

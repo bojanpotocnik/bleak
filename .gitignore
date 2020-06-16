@@ -127,6 +127,7 @@ $RECYCLE.BIN/
 .idea/**/workspace.xml
 .idea/**/tasks.xml
 .idea/dictionaries
+.run/
 
 # Sensitive or high-churn files:
 .idea/**/dataSources/

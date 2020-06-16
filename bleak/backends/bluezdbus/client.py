@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
+import enum
 import logging
 import asyncio
 import os
 import re
 import subprocess
+import time
 import uuid
 from asyncio import Future
 from asyncio.events import AbstractEventLoop
 from functools import wraps, partial
-from typing import Callable, Any, Union
+from typing import Callable, Any, Union, Optional
+
+from twisted.internet.defer import Deferred
+from twisted.python.failure import Failure
 
 from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
@@ -20,10 +25,308 @@ from bleak.backends.bluezdbus.service import BleakGATTServiceBlueZDBus
 from bleak.backends.bluezdbus.characteristic import BleakGATTCharacteristicBlueZDBus
 from bleak.backends.bluezdbus.descriptor import BleakGATTDescriptorBlueZDBus
 
-from txdbus.client import connect as txdbus_connect
+from txdbus.client import connect as txdbus_connect, DBusClientConnection
 from txdbus.error import RemoteError
+from txdbus.objects import DBusObject, dbusMethod
+from txdbus.interface import DBusInterface, Method
 
 logger = logging.getLogger(__name__)
+
+
+class Agent(DBusObject):
+
+    @enum.unique
+    class Capability(enum.Enum):
+        DISPLAY_ONLY = "DisplayOnly"
+        DISPLAY_YES_NO = "DisplayYesNo"
+        KEYBOARD_ONLY = "KeyboardOnly"
+        NO_IO = "NoInputNoOutput"
+        KEYBOARD_DISPLAY = "KeyboardDisplay"
+
+    class Error:
+        class Rejected(Exception):
+            dbusErrorName = "org.bluez.Error.Rejected"
+
+        class Canceled(Exception):
+            dbusErrorName = "org.bluez.Error.Canceled"
+
+    interface = DBusInterface('org.bluez.Agent1',
+                              Method('Release'),
+                              Method('RequestPinCode', arguments='o', returns='s'),
+                              Method('DisplayPinCode', arguments='os'),
+                              Method('RequestPasskey', arguments='o', returns='u'),
+                              Method('DisplayPasskey', arguments='ouq'),
+                              Method('RequestConfirmation', arguments='ou'),
+                              Method('RequestAuthorization', arguments='o'),
+                              Method('AuthorizeService', arguments='os'),
+                              Method('Cancel'),
+                              )
+
+    dbusInterfaces = [interface]
+
+    def __init__(self, bus: DBusClientConnection, object_path: Optional[str] = None):
+        """
+        Create new Bluetooth Agent
+
+        :param bus:          Connection to the System Bus.
+        :param object_path:  Object path of the new agent or None to register agent on /org/bluez/agent<timestamp>
+        """
+        super().__init__(object_path or f"/org/bluez/agent{round(time.time())}")
+        self._bus = bus
+        # bus.exportObject(self)  # TODO: Is this required? Can it be here?
+
+        self.passkey: Optional[int] = None
+        """6-digit passkey for Passkey Entry pairing, if supported"""
+        self.pincode: Optional[Union[int, str]] = None
+        """1-16 characters long alphanumeric pin code for pairing, if supported"""
+
+    def __del__(self):
+        self.unregister()
+
+    # region Methods
+
+    def register(self, io_capabilities: Capability = Capability.KEYBOARD_DISPLAY) -> Deferred:
+        """Register this agent"""
+        return self._bus.callRemote(
+            "/org/bluez",
+            "RegisterAgent",
+            interface="org.bluez.AgentManager1",
+            destination="org.bluez",
+            signature="os",
+            body=[self.getObjectPath(), io_capabilities.value]
+        ).addCallback(lambda res: print(f"Agent {self.getObjectPath()} registered"))
+        # TODO: ).addCallback(lambda res: logger.debug(f"Agent {self.getObjectPath()} registered"))
+
+    def unregister(self) -> Deferred:
+        """Unregister this agent"""
+        def err_cb(fail: Failure):
+            exc = fail.value
+            if isinstance(exc, RemoteError) and (exc.errName == "org.bluez.Error.DoesNotExist"):
+                return
+            raise exc
+
+        return self._bus.callRemote(
+            "/org/bluez",
+            "UnregisterAgent",
+            interface="org.bluez.AgentManager1",
+            destination="org.bluez",
+            signature="o",
+            body=[self.getObjectPath()]
+        ).addErrback(err_cb).addCallback(lambda res: print(f"Agent {self.getObjectPath()} unregistered"))
+        # TODO: ).addErrback(err_cb).addCallback(lambda: logger.debug(f"Agent {self.getObjectPath()} unregistered"))
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def dbus_Release(self) -> None:
+        """
+        This method gets called when the service daemon
+        unregisters the agent. An agent can use it to do
+        cleanup tasks. There is no need to unregister the
+        agent, because when this method gets called it has
+        already been unregistered.
+        """
+        print("Release()")
+        # Agent was released - eventually quit mainloop?
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    @dbusMethod("org.bluez.Agent1", "RequestPinCode")
+    def dbus_RequestPinCode(self, device) -> str:
+        """
+        This method gets called when the service daemon
+        needs to get the passkey for an authentication.
+
+        The return value should be a string of 1-16 characters
+        length. The string can be alphanumeric.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        print(f"RequestPinCode({device})->{self.pincode}")
+        if self.pincode is None:
+            raise self.Error.Rejected("Pin-code pairing rejected by user")
+        return self.pincode
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def RequestPinCode(self, device) -> str:
+        return self.dbus_RequestPinCode(device)
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def dbus_DisplayPinCode(self, device, pincode) -> None:
+        """
+        This method gets called when the service daemon
+        needs to display a pincode for an authentication.
+
+        An empty reply should be returned. When the pincode
+        needs no longer to be displayed, the Cancel method
+        of the agent will be called.
+
+        This is used during the pairing process of keyboards
+        that don't support Bluetooth 2.1 Secure Simple Pairing,
+        in contrast to DisplayPasskey which is used for those
+        that do.
+
+        This method will only ever be called once since
+        older keyboards do not support typing notification.
+
+        Note that the PIN will always be a 6-digit number,
+        zero-padded to 6 digits. This is for harmony with
+        the later specification.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        print(f"DisplayPinCode({device}, pincode={pincode})")
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def DisplayPinCode(self, device, pincode) -> None:
+        """
+        This method gets called when the service daemon
+        needs to display a pincode for an authentication.
+
+        An empty reply should be returned. When the pincode
+        needs no longer to be displayed, the Cancel method
+        of the agent will be called.
+
+        This is used during the pairing process of keyboards
+        that don't support Bluetooth 2.1 Secure Simple Pairing,
+        in contrast to DisplayPasskey which is used for those
+        that do.
+
+        This method will only ever be called once since
+        older keyboards do not support typing notification.
+
+        Note that the PIN will always be a 6-digit number,
+        zero-padded to 6 digits. This is for harmony with
+        the later specification.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        print(f"DisplayPinCode({device}, pincode={pincode})")
+
+    # noinspection PyPep8Naming
+    def dbus_RequestPasskey(self, device) -> int:
+        """
+        This method gets called when the service daemon
+        needs to get the passkey for an authentication.
+
+        The return value should be a numeric value
+        between 0-999999.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        print(f"RequestPasskey({device})->{self.passkey}")
+        if self.passkey is None:
+            raise self.Error.Rejected("Passkey pairing rejected by user")
+        return self.passkey
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def dbus_DisplayPasskey(self, device, passkey, entered) -> None:
+        """
+        This method gets called when the service daemon
+        needs to display a passkey for an authentication.
+
+        The entered parameter indicates the number of already
+        typed keys on the remote side.
+
+        An empty reply should be returned. When the passkey
+        needs no longer to be displayed, the Cancel method
+        of the agent will be called.
+
+        During the pairing process this method might be
+        called multiple times to update the entered value.
+
+        Note that the passkey will always be a 6-digit number,
+        so the display should be zero-padded at the start if
+        the value contains less than 6 digits.
+        """
+        print(f"DisplayPasskey({device}, passkey={passkey}, entered={entered})")
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def DisplayPasskey(self, device, passkey, entered) -> None:
+        """
+        This method gets called when the service daemon
+        needs to display a passkey for an authentication.
+
+        The entered parameter indicates the number of already
+        typed keys on the remote side.
+
+        An empty reply should be returned. When the passkey
+        needs no longer to be displayed, the Cancel method
+        of the agent will be called.
+
+        During the pairing process this method might be
+        called multiple times to update the entered value.
+
+        Note that the passkey will always be a 6-digit number,
+        so the display should be zero-padded at the start if
+        the value contains less than 6 digits.
+        """
+        print(f"DisplayPasskey({device}, passkey={passkey}, entered={entered})")
+
+    # noinspection PyPep8Naming
+    def dbus_RequestConfirmation(self, device, passkey) -> None:
+        """
+        This method gets called when the service daemon
+        needs to confirm a passkey for an authentication.
+
+        To confirm the value it should return an empty reply
+        or an error in case the passkey is invalid.
+
+        Note that the passkey will always be a 6-digit number,
+        so the display should be zero-padded at the start if
+        the value contains less than 6 digits.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        confirm = True  # TODO: Callback
+        print(f"RequestConfirmation({device}, passkey={passkey})->{confirm}")
+        if not confirm:
+            raise self.Error.Rejected("Passkey does not match")
+
+    # noinspection PyPep8Naming
+    def dbus_RequestAuthorization(self, device) -> None:
+        """
+        This method gets called to request the user to
+        authorize an incoming pairing attempt which
+        would in other circumstances trigger the just-works
+        model, or when the user plugged in a device that
+        implements cable pairing. In the latter case, the
+        device would not be connected to the adapter via
+        Bluetooth yet.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        authorize = True  # TODO: Callback
+        print(f"RequestAuthorization({device})->{authorize}")
+        if not authorize:
+            raise self.Error.Rejected("Pairing rejected")
+
+    # noinspection PyPep8Naming
+    def dbus_AuthorizeService(self, device, uuid) -> None:
+        """
+        This method gets called when the service daemon
+        needs to authorize a connection/service request.
+
+        Possible errors: org.bluez.Error.Rejected
+                         org.bluez.Error.Canceled
+        """
+        authorize = True  # TODO: Callback
+        print(f"AuthorizeService({device}, uuid={uuid})->{authorize}")
+        if not authorize:
+            raise self.Error.Rejected("Connection rejected by user")
+
+    # noinspection PyPep8Naming,PyMethodMayBeStatic
+    def dbus_Cancel(self) -> None:
+        """
+        This method gets called to indicate that the agent
+        request failed before a reply was returned.
+        """
+        print("Cancel()")
+
+    # endregion Methods
 
 
 class BleakClientBlueZDBus(BaseBleakClient):
@@ -115,6 +418,12 @@ class BleakClientBlueZDBus(BaseBleakClient):
         self._bus = await txdbus_connect(self._reactor, busAddress="system").asFuture(
             self.loop
         )
+
+        agent = Agent(self._bus)
+        self._bus.exportObject(agent)  # TODO: Is this required?
+
+        await agent.register(Agent.Capability.KEYBOARD_DISPLAY).asFuture(self.loop)
+
         # TODO: Handle path errors from txdbus/dbus
         self._device_path = get_device_object_path(self.device, self.address)
 
@@ -137,9 +446,10 @@ class BleakClientBlueZDBus(BaseBleakClient):
         try:
             await self._bus.callRemote(
                 self._device_path,
-                "Connect",
+                "Pair",
                 interface="org.bluez.Device1",
                 destination="org.bluez",
+                timeout=30
             ).asFuture(self.loop)
         except RemoteError as e:
             await self._cleanup_all()
@@ -165,6 +475,23 @@ class BleakClientBlueZDBus(BaseBleakClient):
             self._bus, self.loop, self._properties_changed_callback
         )
         return True
+
+    async def pair(self, passkey: Optional[int] = None, **kwargs) -> bool:
+        """Pair with the specified device.
+
+        Args:
+            passkey: 6-digit passkey used for Passkey Entry pairing method if this
+                     method is used. Secure connections will be disabled to prevent
+                     Numeric Comparison pairing method if this passkey is provided.
+
+        Returns:
+            Boolean representing pairing and connection status.
+
+        """
+        # Register custom agent for pairing
+        agent = None
+
+        raise NotImplementedError("TODO")
 
     async def _cleanup_notifications(self) -> None:
         """
